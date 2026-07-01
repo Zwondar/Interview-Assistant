@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
+import VoiceButton from './VoiceButton'
 
 /**
- * 左下：回答输入框 + 发送按钮
+ * 左下：回答输入框 + 语音按钮 + 发送按钮
  * props:
  *   value, onChange(value), onSend(), disabled, disabledHint
  */
@@ -23,8 +24,13 @@ export default function AnswerInput({ value, onChange, onSend, disabled, disable
     }
   }
 
+  const handleVoiceResult = useCallback((text) => {
+    onChange(value ? value + text : text)
+  }, [value, onChange])
+
   return (
     <div className="answer-input">
+      <VoiceButton onResult={handleVoiceResult} disabled={disabled} />
       <textarea
         ref={ref}
         className="answer-textarea"

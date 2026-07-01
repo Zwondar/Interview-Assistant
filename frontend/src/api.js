@@ -23,9 +23,6 @@ export async function uploadResume(file) {
 /**
  * 流式 POST：逐块读取 SSE，调用 onChunk(text) 推送文本片段。
  * 遇到 {error} 会抛出。
- * @param {string} url
- * @param {object} body
- * @param {(text: string) => void} onChunk
  */
 async function streamPost(url, body, onChunk) {
   const res = await fetch(url, {
@@ -47,7 +44,6 @@ async function streamPost(url, body, onChunk) {
     if (done) break
     buffer += decoder.decode(value, { stream: true })
 
-    // 按空行分割 SSE 事件
     let idx
     while ((idx = buffer.indexOf('\n\n')) !== -1) {
       const rawEvent = buffer.slice(0, idx)
@@ -61,7 +57,6 @@ async function streamPost(url, body, onChunk) {
         if (obj.error) throw new Error(obj.error)
         if (obj.content) onChunk(obj.content)
       } catch (e) {
-        // 非 JSON（如直接文本），原样输出
         if (e.message && !e.message.startsWith('Unexpected')) throw e
         onChunk(data)
       }
@@ -75,4 +70,61 @@ export function streamAsk(sessionId, onChunk) {
 
 export function streamAnswer(sessionId, answer, onChunk) {
   return streamPost(`${BASE}/answer`, { session_id: sessionId, answer }, onChunk)
+}
+
+// ========== 练习模式 API ==========
+
+/**
+ * 开始练习：创建会话并获取 3 道题
+ */
+export async function startPractice(role) {
+  const res = await fetch(`${BASE}/practice/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '请求失败')
+  }
+  return res.json()
+}
+
+/**
+ * 练习对话：流式追问某道题
+ */
+export function streamPracticeChat(sessionId, questionIndex, message, onChunk) {
+  return streamPost(
+    `${BASE}/practice/chat`,
+    { session_id: sessionId, question_index: questionIndex, message },
+    onChunk
+  )
+}
+
+/**
+ * 标记题目已掌握，生成标准答案
+ */
+export async function masterQuestion(sessionId, questionIndex) {
+  const res = await fetch(`${BASE}/practice/master`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, question_index: questionIndex }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '请求失败')
+  }
+  return res.json()
+}
+
+/**
+ * 获取回放 Markdown 文档
+ */
+export async function fetchReview() {
+  const res = await fetch(`${BASE}/practice/review`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '请求失败')
+  }
+  return res.json()
 }

@@ -9,8 +9,18 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import session as session_store
+import practice_store
+import mastered_store
 from llm import stream_chat
 from pdf_parser import extract_text_from_pdf
+from practice_prompts import (
+    PRACTICE_CHAT_SYSTEM,
+    PRACTICE_QUESTIONS_SYSTEM,
+    MASTER_ANSWER_SYSTEM,
+    build_practice_chat_prompt,
+    build_practice_questions_prompt,
+    build_master_answer_prompt,
+)
 from prompts import (
     ANALYZER_SYSTEM,
     INTERVIEWER_SYSTEM,
@@ -36,6 +46,21 @@ class AskRequest(BaseModel):
 class AnswerRequest(BaseModel):
     session_id: str
     answer: str
+
+
+class PracticeStartRequest(BaseModel):
+    role: str
+
+
+class PracticeChatRequest(BaseModel):
+    session_id: str
+    question_index: int
+    message: str
+
+
+class PracticeMasterRequest(BaseModel):
+    session_id: str
+    question_index: int
 
 
 # ---------- 工具函数 ----------
@@ -184,6 +209,149 @@ def answer(req: AnswerRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ========== 练习模式接口 ==========
+
+@app.post("/api/practice/start")
+def practice_start(req: PracticeStartRequest):
+    """创建练习会话，返回 session_id + 3 道面试题。"""
+    role = req.role.strip()
+    if not role:
+        raise HTTPException(status_code=400, detail="请填写面试角色")
+
+    # 读取该角色已掌握的题目，注入 prompt 防重复
+    mastered = mastered_store.get_mastered_for_role(role)
+
+    messages = [
+        {"role": "system", "content": PRACTICE_QUESTIONS_SYSTEM},
+        {"role": "user", "content": build_practice_questions_prompt(role, mastered)},
+    ]
+
+    full_response = []
+    try:
+        for chunk in stream_chat(messages, temperature=0.8):
+            full_response.append(chunk)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成题目失败: {e}")
+
+    raw = "".join(full_response).strip()
+
+    # 解析 JSON 响应
+    try:
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0]
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0]
+        parsed = json.loads(raw)
+        questions = parsed.get("questions", [])
+    except (json.JSONDecodeError, IndexError):
+        # fallback: 按换行拆题
+        questions = [q.strip("- ").strip() for q in raw.split("\n") if q.strip()]
+
+    if len(questions) < 3:
+        while len(questions) < 3:
+            questions.append("请重新生成题目")
+    questions = questions[:3]
+
+    # 创建会话
+    sid = practice_store.create_session(role)
+    practice_store.set_questions(sid, questions)
+    print(f"[practice/start] role={role}, sid={sid}, questions={len(questions)}")
+
+    return {"session_id": sid, "questions": questions}
+
+
+def _practice_chat_generator(sid: str, question_index: int, message: str) -> Iterator[str]:
+    snap = practice_store.snapshot(sid)
+    if snap is None:
+        yield _sse(json.dumps({"error": "session not found"}, ensure_ascii=False))
+        yield _sse("[DONE]")
+        return
+
+    if question_index < 0 or question_index >= len(snap["questions"]):
+        yield _sse(json.dumps({"error": "无效的题目编号"}, ensure_ascii=False))
+        yield _sse("[DONE]")
+        return
+
+    # 设置当前活跃题目
+    practice_store.set_active_index(sid, question_index)
+
+    # 记录用户消息
+    practice_store.append_history(sid, "user", message)
+
+    question = snap["questions"][question_index]
+    messages = [
+        {"role": "system", "content": PRACTICE_CHAT_SYSTEM},
+        {"role": "user", "content": build_practice_chat_prompt(snap["role"], question, snap["history"])},
+    ]
+
+    full_reply = []
+    try:
+        for chunk in stream_chat(messages, temperature=0.7):
+            full_reply.append(chunk)
+            yield _json_chunk(chunk)
+    except Exception as e:
+        yield _sse(json.dumps({"error": str(e)}, ensure_ascii=False))
+
+    reply_text = "".join(full_reply).strip()
+    if reply_text:
+        practice_store.append_history(sid, "assistant", reply_text)
+
+    yield _sse("[DONE]")
+
+
+@app.post("/api/practice/chat")
+def practice_chat(req: PracticeChatRequest):
+    """流式 SSE：用户对某题追问，模型辅导回复。"""
+    if practice_store.get_session(req.session_id) is None:
+        raise HTTPException(status_code=404, detail="session not found，请先开始练习")
+    return StreamingResponse(
+        _practice_chat_generator(req.session_id, req.question_index, req.message),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/practice/master")
+def practice_master(req: PracticeMasterRequest):
+    """标记一道题为已掌握，生成标准答案并写入文件。"""
+    snap = practice_store.snapshot(req.session_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if req.question_index < 0 or req.question_index >= len(snap["questions"]):
+        raise HTTPException(status_code=400, detail="无效的题目编号")
+
+    question = snap["questions"][req.question_index]
+    role = snap["role"]
+
+    # 调用 LLM 生成标准答案
+    messages = [
+        {"role": "system", "content": MASTER_ANSWER_SYSTEM},
+        {"role": "user", "content": build_master_answer_prompt(role, question, snap["history"])},
+    ]
+
+    full_answer = []
+    try:
+        for chunk in stream_chat(messages, temperature=0.3):
+            full_answer.append(chunk)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成标准答案失败: {e}")
+
+    standard_answer = "".join(full_answer).strip()
+
+    # 持久化
+    mastered_store.add_mastered(role, question, standard_answer)
+    print(f"[practice/master] role={role}, mastered question saved")
+
+    return {"standard_answer": standard_answer}
+
+
+@app.get("/api/practice/review")
+def practice_review():
+    """返回累计标准答案 Markdown 全文。"""
+    content = mastered_store.get_review_markdown()
+    return {"content": content}
 
 
 if __name__ == "__main__":
