@@ -43,6 +43,23 @@ body {
   gap: 14px;
   margin-bottom: 16px;
 }
+.back-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.back-btn:hover {
+  background: #f1f5f9;
+  color: var(--text);
+  border-color: #cbd5e1;
+}
 .app-header h1 {
   font-size: 24px;
 }
@@ -708,6 +725,42 @@ body {
   border-bottom: 1px solid var(--border);
   font-size: 14px;
   color: var(--muted);
+}
+
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zoom-chat-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.zoom-chat-btn:hover {
+  background: #eef2ff;
+  color: var(--primary);
+}
+
+/* 对话区放大：占满视口 */
+.practice-chat-section.chat-zoomed {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  border-radius: 0;
+  border: none;
+}
+.practice-chat-section.chat-zoomed .practice-chat-body {
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .close-chat-btn {

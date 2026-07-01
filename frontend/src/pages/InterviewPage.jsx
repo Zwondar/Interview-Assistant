@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import ResumePanel from '../components/ResumePanel'
 import AnswerInput from '../components/AnswerInput'
 import ChatPanel from '../components/ChatPanel'
@@ -9,6 +10,7 @@ let _msgId = 0
 const nextId = () => ++_msgId
 
 export default function InterviewPage() {
+  const navigate = useNavigate()
   // 简历状态
   const [sessionId, setSessionId] = useState(null)
   const [resumeText, setResumeText] = useState('')
@@ -130,6 +132,7 @@ export default function InterviewPage() {
   return (
     <div className="app">
       <header className="app-header">
+        <button className="back-btn" onClick={() => navigate('/')} title="返回主页">← 返回</button>
         <h1>🎯 面试助手 Agent</h1>
         <span className="subtitle">基于简历的 AI 模拟面试 · 流式问答</span>
       </header>

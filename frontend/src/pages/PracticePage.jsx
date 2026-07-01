@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import LoadingDots from '../components/LoadingDots'
@@ -11,11 +12,13 @@ let _msgId = 0
 const nextId = () => ++_msgId
 
 export default function PracticePage() {
+  const navigate = useNavigate()
   // 角色 & 会话
   const [role, setRole] = useState('')
   const [sessionId, setSessionId] = useState(null)
   const [questions, setQuestions] = useState([])
   const [mastered, setMastered] = useState([false, false, false])
+  const [discussed, setDiscussed] = useState([false, false, false])
 
   // 当前讨论的题目
   const [activeIndex, setActiveIndex] = useState(null)
@@ -32,6 +35,9 @@ export default function PracticePage() {
   // 回放
   const [showReview, setShowReview] = useState(false)
   const [reviewContent, setReviewContent] = useState('')
+
+  // 对话区放大
+  const [chatZoomed, setChatZoomed] = useState(false)
 
   const chatEndRef = useRef(null)
 
@@ -58,6 +64,7 @@ export default function PracticePage() {
     setActiveIndex(null)
     setMessages([])
     setMastered([false, false, false])
+    setDiscussed([false, false, false])
     setHasStarted(true)
 
     try {
@@ -90,6 +97,13 @@ export default function PracticePage() {
     ])
     setInputValue('')
 
+    // 标记该题已讨论过
+    setDiscussed((prev) => {
+      const next = [...prev]
+      next[activeIndex] = true
+      return next
+    })
+
     setLoading('chatting')
     setErrorMsg('')
     const assistantMsgId = nextId()
@@ -117,25 +131,27 @@ export default function PracticePage() {
     }
   }
 
-  // ---------- 标记已掌握 ----------
+  // ---------- 标记已掌握（乐观更新：立即标记，后台异步保存） ----------
   const handleMaster = async (index) => {
     if (!sessionId || mastered[index]) return
     setErrorMsg('')
 
+    // 1. 立即在前端标记已掌握，避免重复点击
+    setMastered((prev) => {
+      const next = [...prev]
+      next[index] = true
+      return next
+    })
+    if (activeIndex === index) {
+      setActiveIndex(null)
+      setMessages([])
+    }
+
+    // 2. 后台异步调用 LLM 生成标准答案并写入文件
     try {
       await masterQuestion(sessionId, index)
-      setMastered((prev) => {
-        const next = [...prev]
-        next[index] = true
-        return next
-      })
-      // 如果当前正在讨论这道题，关闭对话区
-      if (activeIndex === index) {
-        setActiveIndex(null)
-        setMessages([])
-      }
     } catch (e) {
-      showError(e.message)
+      showError('标准答案生成失败（题目已标记为掌握）: ' + e.message)
     }
   }
 
@@ -154,6 +170,7 @@ export default function PracticePage() {
   return (
     <div className="app">
       <header className="app-header">
+        <button className="back-btn" onClick={() => navigate('/')} title="返回主页">← 返回</button>
         <h1>💡 角色练习模式</h1>
         <span className="subtitle">选择目标岗位，AI 生成面试题并辅导你深入理解</span>
       </header>
@@ -201,6 +218,7 @@ export default function PracticePage() {
                   question={q}
                   active={activeIndex === i}
                   mastered={mastered[i]}
+                  discussed={discussed[i]}
                   onSelect={() => handleSelectQuestion(i)}
                   onMaster={() => handleMaster(i)}
                 />
@@ -211,15 +229,24 @@ export default function PracticePage() {
 
         {/* 底部：对话区（选中某题后展示） */}
         {activeIndex !== null && (
-          <section className="practice-chat-section">
+          <section className={`practice-chat-section ${chatZoomed ? 'chat-zoomed' : ''}`}>
             <div className="practice-chat-header">
               <span>📌 正在讨论：{questions[activeIndex]?.slice(0, 50)}…</span>
-              <button
-                className="close-chat-btn"
-                onClick={() => { setActiveIndex(null); setMessages([]) }}
-              >
-                ✕ 关闭
-              </button>
+              <div className="chat-header-actions">
+                <button
+                  className="zoom-chat-btn"
+                  onClick={() => setChatZoomed((z) => !z)}
+                  title={chatZoomed ? '缩小对话区' : '放大对话区'}
+                >
+                  {chatZoomed ? '🔲 缩小' : '🔍 放大'}
+                </button>
+                <button
+                  className="close-chat-btn"
+                  onClick={() => { setActiveIndex(null); setMessages([]); setChatZoomed(false) }}
+                >
+                  ✕ 关闭
+                </button>
+              </div>
             </div>
 
             <div className="practice-chat-body">

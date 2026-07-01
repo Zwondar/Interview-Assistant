@@ -2,11 +2,13 @@ import { useRef, useState, useCallback } from 'react'
 
 /**
  * 语音输入按钮：使用 Web Speech API 进行语音转文字
+ * 持续监听直到用户手动停止，不会因停顿而中断
  * props: onResult(text), disabled
  */
 export default function VoiceButton({ onResult, disabled }) {
   const [listening, setListening] = useState(false)
   const [unsupported, setUnsupported] = useState(false)
+  const accumulatedRef = useRef('')       // 累积所有识别结果
   const recognitionRef = useRef(null)
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
@@ -19,32 +21,45 @@ export default function VoiceButton({ onResult, disabled }) {
     }
 
     if (listening) {
-      // 停止
+      // 用户主动停止
       recognitionRef.current?.stop()
-      setListening(false)
       return
     }
 
-    // 开始
+    // 开始持续监听
+    accumulatedRef.current = ''
+
     const recognition = new SpeechRecognition()
     recognition.lang = 'zh-CN'
     recognition.interimResults = false
-    recognition.continuous = false
+    recognition.continuous = true      // 持续监听，不会因停顿自动停止
     recognition.maxAlternatives = 1
 
     recognition.onresult = (event) => {
-      const transcript = event.results[0]?.[0]?.transcript
-      if (transcript && onResult) {
-        onResult(transcript)
+      // 拼接本次识别的最终结果
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          accumulatedRef.current += event.results[i][0]?.transcript || ''
+        }
       }
-      setListening(false)
     }
 
-    recognition.onerror = () => {
+    recognition.onerror = (event) => {
+      // no-speech 等非致命错误不停止，继续监听
+      if (event.error === 'aborted' || event.error === 'no-speech') {
+        return
+      }
+      // 致命错误才停止
       setListening(false)
     }
 
     recognition.onend = () => {
+      // continuous=true 时，onend 只在主动 stop() 或致命错误后触发
+      // 此时将累积结果传给父组件
+      const finalText = accumulatedRef.current.trim()
+      if (finalText && onResult) {
+        onResult(finalText)
+      }
       setListening(false)
     }
 
@@ -75,7 +90,7 @@ export default function VoiceButton({ onResult, disabled }) {
       onClick={toggleListen}
       title={listening ? '正在录音，点击停止' : '点击开始语音输入'}
     >
-      {listening ? '🔴' : '🎤'}
+      {listening ? '⏹' : '🎤'}
     </button>
   )
 }
