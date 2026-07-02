@@ -128,3 +128,31 @@ export async function fetchReview() {
   }
   return res.json()
 }
+
+/**
+ * 获取结构化回放数据（含答案，按卡片展示）
+ */
+export async function fetchReviewItems() {
+  const res = await fetch(`${BASE}/practice/review-items`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '请求失败')
+  }
+  return res.json()
+}
+
+/**
+ * 删除一道已掌握的题目
+ */
+export async function deleteMasteredQuestion(role, question) {
+  const res = await fetch(`${BASE}/practice/mastered`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role, question }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '删除失败')
+  }
+  return res.json()
+}

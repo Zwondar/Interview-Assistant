@@ -15,7 +15,7 @@ def create_session(role: str) -> str:
             "role": role,
             "questions": [],       # 3 道面试题
             "active_index": None,  # 当前正在讨论的题号 (0/1/2)
-            "history": [],         # 对话历史 [{role, content}, ...]
+            "history": {0: [], 1: [], 2: []},  # 按题号隔离的对话历史 {question_index: [{role, content}, ...]}
         }
     return sid
 
@@ -41,12 +41,21 @@ def set_active_index(sid: str, index: int) -> None:
             s["active_index"] = index
 
 
-def append_history(sid: str, role: str, content: str) -> None:
-    """追加一条对话记录。"""
+def append_history(sid: str, question_index: int, role: str, content: str) -> None:
+    """追加一条对话记录到指定题目。"""
     with _lock:
         s = _sessions.get(sid)
-        if s:
-            s["history"].append({"role": role, "content": content})
+        if s and question_index in s["history"]:
+            s["history"][question_index].append({"role": role, "content": content})
+
+
+def get_history(sid: str, question_index: int) -> list[dict]:
+    """获取指定题目的对话历史。"""
+    with _lock:
+        s = _sessions.get(sid)
+        if s and question_index in s["history"]:
+            return list(s["history"][question_index])
+        return []
 
 
 def session_count() -> int:
@@ -64,5 +73,5 @@ def snapshot(sid: str) -> dict:
             "role": s["role"],
             "questions": list(s["questions"]),
             "active_index": s["active_index"],
-            "history": list(s["history"]),
+            "history": {k: list(v) for k, v in s["history"].items()},
         }

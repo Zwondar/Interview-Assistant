@@ -6,7 +6,7 @@ import LoadingDots from '../components/LoadingDots'
 import AnswerInput from '../components/AnswerInput'
 import QuestionCard from '../components/QuestionCard'
 import ReplayModal from '../components/ReplayModal'
-import { startPractice, streamPracticeChat, masterQuestion, fetchReview } from '../api'
+import { startPractice, streamPracticeChat, masterQuestion, fetchReviewItems, deleteMasteredQuestion } from '../api'
 
 let _msgId = 0
 const nextId = () => ++_msgId
@@ -34,6 +34,7 @@ export default function PracticePage() {
 
   // 回放
   const [showReview, setShowReview] = useState(false)
+  const [reviewItems, setReviewItems] = useState([])
   const [reviewContent, setReviewContent] = useState('')
 
   // 对话区放大
@@ -159,9 +160,22 @@ export default function PracticePage() {
   const handleReplay = async () => {
     setErrorMsg('')
     try {
-      const data = await fetchReview()
-      setReviewContent(data.content)
+      const data = await fetchReviewItems()
+      setReviewItems(data.items || [])
+      setReviewContent(data.content || '')
       setShowReview(true)
+    } catch (e) {
+      showError(e.message)
+    }
+  }
+
+  // ---------- 删除已掌握题目 ----------
+  const handleDeleteMastered = async (role, question) => {
+    setErrorMsg('')
+    try {
+      const data = await deleteMasteredQuestion(role, question)
+      setReviewItems(data.items || [])
+      setReviewContent(data.content || '')
     } catch (e) {
       showError(e.message)
     }
@@ -307,7 +321,12 @@ export default function PracticePage() {
 
       {/* 回放弹窗 */}
       {showReview && (
-        <ReplayModal content={reviewContent} onClose={() => setShowReview(false)} />
+        <ReplayModal
+          items={reviewItems}
+          content={reviewContent}
+          onClose={() => setShowReview(false)}
+          onDelete={handleDeleteMastered}
+        />
       )}
     </div>
   )

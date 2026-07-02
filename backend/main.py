@@ -63,6 +63,11 @@ class PracticeMasterRequest(BaseModel):
     question_index: int
 
 
+class DeleteMasteredRequest(BaseModel):
+    role: str
+    question: str
+
+
 # ---------- 工具函数 ----------
 def _sse(data: str) -> str:
     """格式化一条 SSE 事件。"""
@@ -121,7 +126,7 @@ def _ask_generator(sid: str) -> Iterator[str]:
 
     full_question = []
     try:
-        for chunk in stream_chat(messages, temperature=0.8):
+        for chunk in stream_chat(messages, temperature=0.8, label="interview_ask"):
             full_question.append(chunk)
             yield _json_chunk(chunk)
     except Exception as e:
@@ -186,7 +191,7 @@ def _answer_generator(sid: str, answer: str) -> Iterator[str]:
 
     full_analysis = []
     try:
-        for chunk in stream_chat(messages, temperature=0.3):
+        for chunk in stream_chat(messages, temperature=0.3, label="interview_answer"):
             full_analysis.append(chunk)
             yield _json_chunk(chunk)
     except Exception as e:
@@ -230,7 +235,7 @@ def practice_start(req: PracticeStartRequest):
 
     full_response = []
     try:
-        for chunk in stream_chat(messages, temperature=0.8):
+        for chunk in stream_chat(messages, temperature=0.8, label="practice_generate_questions"):
             full_response.append(chunk)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成题目失败: {e}")
@@ -277,18 +282,20 @@ def _practice_chat_generator(sid: str, question_index: int, message: str) -> Ite
     # 设置当前活跃题目
     practice_store.set_active_index(sid, question_index)
 
-    # 记录用户消息
-    practice_store.append_history(sid, "user", message)
+    # 记录用户消息（按题号隔离）
+    practice_store.append_history(sid, question_index, "user", message)
 
+    # 只取当前题目的对话历史，不混入其他题的讨论
     question = snap["questions"][question_index]
+    question_history = practice_store.get_history(sid, question_index)
     messages = [
         {"role": "system", "content": PRACTICE_CHAT_SYSTEM},
-        {"role": "user", "content": build_practice_chat_prompt(snap["role"], question, snap["history"])},
+        {"role": "user", "content": build_practice_chat_prompt(snap["role"], question, question_history)},
     ]
 
     full_reply = []
     try:
-        for chunk in stream_chat(messages, temperature=0.7):
+        for chunk in stream_chat(messages, temperature=0.7, label="practice_chat"):
             full_reply.append(chunk)
             yield _json_chunk(chunk)
     except Exception as e:
@@ -296,7 +303,7 @@ def _practice_chat_generator(sid: str, question_index: int, message: str) -> Ite
 
     reply_text = "".join(full_reply).strip()
     if reply_text:
-        practice_store.append_history(sid, "assistant", reply_text)
+        practice_store.append_history(sid, question_index, "assistant", reply_text)
 
     yield _sse("[DONE]")
 
@@ -325,15 +332,18 @@ def practice_master(req: PracticeMasterRequest):
     question = snap["questions"][req.question_index]
     role = snap["role"]
 
+    # 只取当前题目的对话历史生成标准答案
+    question_history = practice_store.get_history(req.session_id, req.question_index)
+
     # 调用 LLM 生成标准答案
     messages = [
         {"role": "system", "content": MASTER_ANSWER_SYSTEM},
-        {"role": "user", "content": build_master_answer_prompt(role, question, snap["history"])},
+        {"role": "user", "content": build_master_answer_prompt(role, question, question_history)},
     ]
 
     full_answer = []
     try:
-        for chunk in stream_chat(messages, temperature=0.3):
+        for chunk in stream_chat(messages, temperature=0.3, label="practice_master"):
             full_answer.append(chunk)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成标准答案失败: {e}")
@@ -352,6 +362,26 @@ def practice_review():
     """返回累计标准答案 Markdown 全文。"""
     content = mastered_store.get_review_markdown()
     return {"content": content}
+
+
+@app.get("/api/practice/review-items")
+def practice_review_items():
+    """返回所有已掌握题目的结构化数据（含答案），供前端按卡片展示。"""
+    items = mastered_store.get_all_mastered()
+    return {"items": items, "content": mastered_store.get_review_markdown()}
+
+
+@app.delete("/api/practice/mastered")
+def practice_delete_mastered(req: DeleteMasteredRequest):
+    """删除一道已掌握的题目，恢复为未掌握状态。"""
+    ok = mastered_store.remove_mastered(req.role, req.question)
+    if not ok:
+        raise HTTPException(status_code=404, detail="未找到该题目，可能已被删除")
+    return {
+        "ok": True,
+        "items": mastered_store.get_all_mastered(),
+        "content": mastered_store.get_review_markdown(),
+    }
 
 
 if __name__ == "__main__":
